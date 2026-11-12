@@ -27,7 +27,7 @@ import Returns from "../pages/Returns.vue";
 import Tickets from "../pages/Tickets.vue";
 import TicketDetails from "../pages/TicketDetails.vue";
 import KnowledgeBase from "../pages/KnowledgeBase.vue";
-import AiSettings from "../pages/AiSettings.vue";
+import AiSettings from "../pages/AISettings.vue";
 import Analytics from "../pages/Analytics.vue";
 import Settings from "../pages/Settings.vue";
 import Billing from "../pages/Billing.vue";

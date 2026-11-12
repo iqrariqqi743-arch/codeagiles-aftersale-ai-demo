@@ -1,0 +1,39 @@
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Local dependencies
+node_modules
+vendor
+
+# Local IDE files
+.vscode
+.idea
+
+# Tests and development
+tests
+phpunit.xml
+README.md
+
+# Laravel local data
+storage/logs/*
+storage/framework/cache/data/*
+storage/framework/sessions/*
+storage/framework/views/*
+database/*.sqlite
+database/*.sqlite-*
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Docker configuration
+Dockerfile
+.dockerignore

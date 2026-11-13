@@ -112,6 +112,8 @@ Route::middleware('auth:sanctum')->group(function () {
     | STRIPE CHECKOUT & SUBSCRIPTIONS
     |--------------------------------------------------------------------------
     */
+    Route::get('/subscription/plans', [SubscriptionPlanController::class, 'index']);
+
 
     Route::post(
         '/stripe/checkout',
@@ -359,8 +361,6 @@ Route::middleware('auth:sanctum')->group(function () {
             '/analytics/overview',
             [AnalyticsController::class, 'overview']
         );
-
-        Route::get('/subscription/plans', [SubscriptionPlanController::class, 'index']);
     }); // End active.subscription
 
 }); // End auth:sanctum

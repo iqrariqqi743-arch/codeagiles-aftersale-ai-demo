@@ -463,7 +463,7 @@ onUnmounted(() => {
                             class="mb-7 inline-flex items-center gap-2 rounded-full border border-cyan-500/25 bg-cyan-500/10 px-4 py-2 text-xs font-semibold text-cyan-600 dark:text-cyan-300 sm:text-sm"
                         >
                             <Sparkles :size="15" />
-                            Smarter After-Sales Customer Support
+                            AI-Powered WooCommerce Customer Support
                         </div>
                     </div>
 
@@ -471,7 +471,7 @@ onUnmounted(() => {
                         <h1
                             class="text-4xl font-extrabold leading-[1.12] tracking-tight sm:text-5xl lg:text-6xl"
                         >
-                            Customer Support,
+                            WooCommerce &amp; Ecommerce Support,
 
                             <span
                                 class="mt-2 block bg-gradient-to-r from-cyan-500 via-sky-400 to-blue-500 bg-clip-text text-transparent"
@@ -487,10 +487,10 @@ onUnmounted(() => {
                         <p
                             class="mt-7 max-w-xl text-base leading-8 text-slate-600 dark:text-slate-400 sm:text-lg"
                         >
-                            Manage customer support tickets, email
-                            conversations, product returns, and ecommerce
-                            operations from one powerful platform. Simplify
-                            after-sales support with CodeAgiles AfterSale AI.
+                            Simplify WooCommerce and ecommerce after-sales
+                            support with AI assistance. Manage customer tickets,
+                            email conversations, product returns, and multiple
+                            stores in one CodeAgiles AfterSale AI dashboard.
                         </p>
                     </div>
 
@@ -718,15 +718,14 @@ onUnmounted(() => {
                     <h2
                         class="text-3xl font-extrabold leading-tight tracking-tight sm:text-4xl lg:text-5xl"
                     >
-                        Everything You Need to Support Your Customers
+                        WooCommerce Customer Support &amp; Returns Management
                     </h2>
 
                     <p
                         class="mx-auto mt-6 max-w-2xl text-base leading-8 text-slate-600 dark:text-slate-400"
                     >
-                        Bring your after-sales operations together and give your
-                        team the tools to manage customer issues more
-                        efficiently.
+                        Bring ecommerce support tickets, customer conversations,
+                        and product returns together in one organized platform.
                     </p>
                 </div>
 

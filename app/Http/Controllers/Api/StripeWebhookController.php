@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Subscription;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Stripe\StripeClient;
 use Stripe\Webhook;
@@ -44,23 +45,25 @@ class StripeWebhookController extends Controller
                 case 'customer.subscription.created':
                 case 'customer.subscription.updated':
                 case 'customer.subscription.deleted':
-                    $this->syncSubscription($event->data->object);
+                    $this->syncSubscription(
+                        $event->data->object
+                    );
                     break;
 
                 case 'invoice.paid':
                 case 'invoice.payment_failed':
-                    $invoice = $event->data->object;
+                    $subscriptionId = $this->invoiceSubscriptionId(
+                        $event->data->object
+                    );
 
-                    // Fetch the latest Stripe subscription state.
-                    $stripeSubscriptionId = $this->invoiceSubscriptionId($invoice);
-
-                    if ($stripeSubscriptionId) {
-                        $this->syncById($stripeSubscriptionId);
+                    if ($subscriptionId) {
+                        $this->syncById($subscriptionId);
                     }
                     break;
             }
 
             return response('Webhook received', 200);
+
         } catch (\Throwable $e) {
             Log::error('Stripe webhook processing failed', [
                 'event_id' => $event->id,
@@ -68,7 +71,6 @@ class StripeWebhookController extends Controller
                 'error' => $e->getMessage(),
             ]);
 
-            // Non-2xx responses allow Stripe to retry.
             return response('Webhook processing failed', 500);
         }
     }
@@ -90,7 +92,11 @@ class StripeWebhookController extends Controller
 
         $plan = $session->metadata->plan ?? null;
 
-        $this->syncById($subscriptionId, $userId, $plan);
+        $this->syncById(
+            $subscriptionId,
+            $userId,
+            $plan
+        );
     }
 
     private function syncById(
@@ -98,14 +104,20 @@ class StripeWebhookController extends Controller
         ?string $userId = null,
         ?string $plan = null
     ): void {
-        $stripe = new StripeClient(config('services.stripe.secret'));
+        $stripe = new StripeClient(
+            config('services.stripe.secret')
+        );
 
         $stripeSubscription = $stripe->subscriptions->retrieve(
             $subscriptionId,
             []
         );
 
-        $this->syncSubscription($stripeSubscription, $userId, $plan);
+        $this->syncSubscription(
+            $stripeSubscription,
+            $userId,
+            $plan
+        );
     }
 
     private function syncSubscription(
@@ -115,10 +127,9 @@ class StripeWebhookController extends Controller
     ): void {
         $stripeId = $stripeSubscription->id;
 
-        $existing = Subscription::where(
-            'stripe_subscription_id',
-            $stripeId
-        )->first();
+        $existing = Subscription::query()
+            ->where('stripe_subscription_id', $stripeId)
+            ->first();
 
         $userId = $existing?->user_id
             ?? $userId
@@ -130,11 +141,11 @@ class StripeWebhookController extends Controller
             );
         }
 
-        $priceId = $stripeSubscription->items->data[0]->price->id
-            ?? null;
+        $item = $stripeSubscription->items->data[0] ?? null;
+        $priceId = $item?->price?->id;
 
-        $plan = $plan
-            ?? $this->planFromPrice($priceId)
+        $plan = $this->planFromPrice($priceId)
+            ?? $plan
             ?? ($stripeSubscription->metadata->plan ?? null)
             ?? $existing?->plan;
 
@@ -144,40 +155,105 @@ class StripeWebhookController extends Controller
             );
         }
 
-        $item = $stripeSubscription->items->data[0] ?? null;
+        $values = [
+            'user_id' => (int) $userId,
+            'plan' => $plan,
+            'stripe_customer_id' => $stripeSubscription->customer,
+            'stripe_subscription_id' => $stripeId,
+            'stripe_price_id' => $priceId,
+            'status' => $stripeSubscription->status,
 
-        Subscription::updateOrCreate(
-            ['stripe_subscription_id' => $stripeId],
-            [
-                'user_id' => $userId,
-                'plan' => $plan,
-                'stripe_customer_id' => $stripeSubscription->customer,
-                'stripe_price_id' => $priceId,
-                'status' => $stripeSubscription->status,
-                'current_period_start' => $this->dateFromTimestamp(
-                    $item->current_period_start
-                        ?? $stripeSubscription->current_period_start
-                        ?? null
-                ),
-                'current_period_end' => $this->dateFromTimestamp(
-                    $item->current_period_end
-                        ?? $stripeSubscription->current_period_end
-                        ?? null
-                ),
-                'cancel_at_period_end' =>
-                (bool) $stripeSubscription->cancel_at_period_end,
-                'canceled_at' => $this->dateFromTimestamp(
-                    $stripeSubscription->canceled_at ?? null
-                ),
-                'ended_at' => $this->dateFromTimestamp(
-                    $stripeSubscription->ended_at ?? null
-                ),
-            ]
-        );
+            'current_period_start' => $this->dateFromTimestamp(
+                $item?->current_period_start
+                    ?? $stripeSubscription->current_period_start
+                    ?? null
+            ),
+
+            'current_period_end' => $this->dateFromTimestamp(
+                $item?->current_period_end
+                    ?? $stripeSubscription->current_period_end
+                    ?? null
+            ),
+
+            'cancel_at_period_end' =>
+                (bool) ($stripeSubscription->cancel_at_period_end ?? false),
+
+            'canceled_at' => $this->dateFromTimestamp(
+                $stripeSubscription->canceled_at ?? null
+            ),
+
+            'ended_at' => $this->dateFromTimestamp(
+                $stripeSubscription->ended_at ?? null
+            ),
+        ];
+
+        DB::transaction(function () use (
+            $stripeId,
+            $userId,
+            $values
+        ) {
+            // Serialize subscription changes for this owner.
+            $user = DB::table('users')
+                ->where('id', $userId)
+                ->lockForUpdate()
+                ->first();
+
+            if (!$user) {
+                throw new \RuntimeException(
+                    'Subscription owner not found: ' . $userId
+                );
+            }
+
+            // Lock all existing subscriptions for this user.
+            $subscriptions = Subscription::query()
+                ->where('user_id', $userId)
+                ->orderByDesc('id')
+                ->lockForUpdate()
+                ->get();
+
+            // Reuse the existing Stripe subscription record.
+            $record = $subscriptions->first(
+                fn ($subscription) =>
+                    $subscription->stripe_subscription_id === $stripeId
+            );
+
+            if (!$record) {
+                // Convert the local 10-day free trial into paid.
+                $record = $subscriptions->first(
+                    fn ($subscription) =>
+                        $subscription->status === 'trialing'
+                        && empty($subscription->stripe_subscription_id)
+                );
+            }
+
+            if (!$record) {
+                // No local trial exists: create a Stripe record.
+                $record = new Subscription();
+            }
+
+            $record->fill($values);
+            $record->save();
+
+            // Close any leftover local free trial records.
+            // This also handles webhook events arriving out of order.
+            if (!empty($record->stripe_subscription_id)) {
+                Subscription::query()
+                    ->where('user_id', $userId)
+                    ->where('id', '!=', $record->id)
+                    ->whereNull('stripe_subscription_id')
+                    ->where('status', 'trialing')
+                    ->update([
+                        'status' => 'canceled',
+                        'current_period_end' => now(),
+                        'ended_at' => now(),
+                    ]);
+            }
+        });
 
         Log::info('Stripe subscription synchronized', [
-            'subscription_id' => $stripeId,
+            'stripe_subscription_id' => $stripeId,
             'user_id' => $userId,
+            'plan' => $plan,
             'status' => $stripeSubscription->status,
         ]);
     }
@@ -202,13 +278,11 @@ class StripeWebhookController extends Controller
 
     private function invoiceSubscriptionId(object $invoice): ?string
     {
-        // Support newer Stripe invoice payloads.
         $id = $invoice->parent
             ->subscription_details
             ->subscription
             ?? null;
 
-        // Support older Stripe invoice payloads.
         $id = $id ?? ($invoice->subscription ?? null);
 
         return is_string($id) ? $id : null;

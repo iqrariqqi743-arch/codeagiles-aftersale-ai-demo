@@ -40,6 +40,9 @@ const error = ref("");
 const success = ref("");
 
 const subscription = ref(null);
+const trial = ref(null);
+const isFreeTrial = ref(false);
+const hasStripeSubscription = ref(false);
 const plans = ref([]);
 const plansError = ref("");
 
@@ -80,6 +83,15 @@ const hasActiveSubscription = computed(() => {
 
     return !Number.isNaN(endDate.getTime()) && endDate.getTime() > Date.now();
 });
+
+const hasManageableStripeSubscription = computed(() =>
+    hasStripeSubscription.value &&
+    ["active", "trialing", "past_due", "unpaid"].includes(status.value),
+);
+
+const trialDaysRemaining = computed(() => Number(trial.value?.days_remaining ?? 0));
+const trialEndsAt = computed(() => trial.value?.ends_at ?? subscription.value?.current_period_end);
+const isTrialExpired = computed(() => isFreeTrial.value && Boolean(trial.value?.is_expired));
 
 const currentPlanDetails = computed(() =>
     plans.value.find((plan) => plan.slug === currentPlan.value),
@@ -281,6 +293,11 @@ async function fetchSubscription(isRefresh = false) {
             data.subscription ??
             data.data?.subscription ??
             null;
+        trial.value = data.trial ?? null;
+        isFreeTrial.value = Boolean(data.is_free_trial ?? subscription.value?.is_free_trial);
+        hasStripeSubscription.value = Boolean(
+            data.has_stripe_subscription ?? subscription.value?.has_stripe_subscription,
+        );
     } catch (err) {
         error.value = err.message;
     } finally {
@@ -331,9 +348,9 @@ async function subscribe(plan) {
 
     clearMessages();
 
-    if (hasActiveSubscription.value) {
+    if (hasManageableStripeSubscription.value) {
         error.value =
-            "You already have an active subscription. Use Manage Billing to change your plan.";
+            "You already have a Stripe subscription. Use Manage Billing to change your plan.";
         return;
     }
 
@@ -501,6 +518,33 @@ onMounted(async () => {
         </div>
 
         <template v-else>
+            <!-- FREE TRIAL STATUS -->
+            <section
+                v-if="isFreeTrial"
+                class="rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-6 md:p-8"
+            >
+                <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                        <div class="flex items-center gap-2 font-bold text-cyan-500">
+                            <Sparkles :size="20" />
+                            {{ isTrialExpired ? "Free Trial Expired" : "10-Day Free Trial Active" }}
+                        </div>
+                        <h2 class="mt-3 text-2xl font-extrabold">
+                            {{ isTrialExpired ? "Choose a plan to continue" : `${trialDaysRemaining} days remaining` }}
+                        </h2>
+                        <p class="mt-2 text-sm" :class="mutedClass">
+                            Trial ends: {{ formatDate(trialEndsAt) }}.
+                            No payment is required during your free trial.
+                            If you subscribe now, Stripe will start the paid subscription at checkout.
+                        </p>
+                    </div>
+                    <div class="rounded-xl border border-cyan-500/20 px-4 py-3 text-center">
+                        <div class="text-3xl font-extrabold text-cyan-500">{{ trialDaysRemaining }}</div>
+                        <div class="text-xs" :class="mutedClass">Days left</div>
+                    </div>
+                </div>
+            </section>
+
             <!-- CURRENT SUBSCRIPTION -->
             <section
                 class="overflow-hidden rounded-2xl border p-6 shadow-sm md:p-8"
@@ -561,7 +605,7 @@ onMounted(async () => {
 
                     <div class="rounded-xl border p-4" :class="innerClass">
                         <p class="text-xs" :class="mutedClass">
-                            Billing Period End
+                            {{ isFreeTrial ? "Trial Ends" : "Billing Period End" }}
                         </p>
 
                         <div class="mt-2 flex items-center gap-2">
@@ -666,7 +710,7 @@ onMounted(async () => {
                 </div>
 
                 <div
-                    v-if="hasActiveSubscription"
+                    v-if="hasManageableStripeSubscription"
                     class="mt-6 flex flex-wrap gap-3"
                 >
                     <button
@@ -856,7 +900,7 @@ onMounted(async () => {
                             :disabled="
                                 Boolean(checkoutLoading) ||
                                 portalLoading ||
-                                hasActiveSubscription
+                                hasManageableStripeSubscription
                             "
                             @click="subscribe(plan)"
                             class="mt-7 flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-60"
@@ -876,7 +920,7 @@ onMounted(async () => {
 
                             <CheckCircle2
                                 v-else-if="
-                                    hasActiveSubscription &&
+                                    hasManageableStripeSubscription &&
                                     currentPlan === plan.slug
                                 "
                                 :size="17"
@@ -887,10 +931,10 @@ onMounted(async () => {
                             {{
                                 checkoutLoading === plan.slug
                                     ? "Opening Stripe..."
-                                    : hasActiveSubscription &&
+                                    : hasManageableStripeSubscription &&
                                         currentPlan === plan.slug
                                       ? "Current Plan"
-                                      : hasActiveSubscription
+                                      : hasManageableStripeSubscription
                                         ? "Manage Billing to Change"
                                         : `Subscribe to ${plan.name}`
                             }}
@@ -955,7 +999,7 @@ onMounted(async () => {
                 </div>
 
                 <button
-                    v-if="hasActiveSubscription"
+                    v-if="hasManageableStripeSubscription"
                     type="button"
                     :disabled="portalLoading"
                     @click="manageBilling"

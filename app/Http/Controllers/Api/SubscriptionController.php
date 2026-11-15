@@ -37,12 +37,25 @@ class SubscriptionController extends Controller
             ->latest('id')
             ->get();
 
-        // Prefer a currently valid subscription.
-        // This prevents an expired trial from hiding
-        // a valid paid subscription.
+        /*
+         * Prefer a valid Stripe subscription over a free trial.
+         * This prevents the trial from hiding a paid plan.
+         */
         $subscription = $subscriptions->first(
-            fn (Subscription $item) => $item->isActive()
-        ) ?? $subscriptions->first();
+            fn (Subscription $item) =>
+                !empty($item->stripe_subscription_id)
+                && $item->isActive()
+        );
+
+        if (!$subscription) {
+            $subscription = $subscriptions->first(
+                fn (Subscription $item) => $item->isActive()
+            );
+        }
+
+        if (!$subscription) {
+            $subscription = $subscriptions->first();
+        }
 
         if (!$subscription) {
             return response()->json([
@@ -50,6 +63,8 @@ class SubscriptionController extends Controller
                 'message' => 'No subscription found.',
                 'has_subscription' => false,
                 'subscription' => null,
+                'is_free_trial' => false,
+                'has_stripe_subscription' => false,
                 'trial' => [
                     'is_trialing' => false,
                     'is_expired' => false,
@@ -79,13 +94,28 @@ class SubscriptionController extends Controller
             'price' => null,
         ];
 
-        $isTrialing = $subscription->isTrialing();
-        $isTrialExpired = $subscription->isTrialExpired();
+        $hasStripeSubscription =
+            !empty($subscription->stripe_subscription_id);
+
+        $isFreeTrial =
+            !$hasStripeSubscription
+            && $subscription->status === 'trialing';
+
+        $isTrialExpired = $isFreeTrial
+            && $subscription->isTrialExpired();
+
+        $trialDaysRemaining = $isFreeTrial
+            ? $subscription->trialDaysRemaining()
+            : 0;
 
         return response()->json([
             'success' => true,
             'message' => 'Subscription fetched successfully.',
             'has_subscription' => true,
+
+            'is_free_trial' => $isFreeTrial,
+            'has_stripe_subscription' => $hasStripeSubscription,
+
             'subscription' => [
                 'id' => $subscription->id,
                 'plan' => $subscription->plan,
@@ -95,21 +125,34 @@ class SubscriptionController extends Controller
                 'billing_interval' => 'month',
                 'status' => $subscription->status,
                 'is_active' => $subscription->isActive(),
+
+                'is_free_trial' => $isFreeTrial,
+                'has_stripe_subscription' =>
+                    $hasStripeSubscription,
+
                 'current_period_start' =>
-                    $subscription->current_period_start?->toIso8601String(),
+                    $subscription->current_period_start
+                        ?->toIso8601String(),
+
                 'current_period_end' =>
-                    $subscription->current_period_end?->toIso8601String(),
+                    $subscription->current_period_end
+                        ?->toIso8601String(),
+
                 'cancel_at_period_end' =>
                     $subscription->cancel_at_period_end,
+
                 'canceled_at' =>
-                    $subscription->canceled_at?->toIso8601String(),
+                    $subscription->canceled_at
+                        ?->toIso8601String(),
             ],
+
             'trial' => [
-                'is_trialing' => $isTrialing,
+                'is_trialing' => $isFreeTrial && !$isTrialExpired,
                 'is_expired' => $isTrialExpired,
-                'days_remaining' => $subscription->trialDaysRemaining(),
-                'ends_at' => $subscription->status === 'trialing'
-                    ? $subscription->current_period_end?->toIso8601String()
+                'days_remaining' => $trialDaysRemaining,
+                'ends_at' => $isFreeTrial
+                    ? $subscription->current_period_end
+                        ?->toIso8601String()
                     : null,
             ],
         ]);
@@ -118,8 +161,9 @@ class SubscriptionController extends Controller
     /**
      * Create a Stripe Customer Portal session.
      */
-    public function createPortalSession(Request $request): JsonResponse
-    {
+    public function createPortalSession(
+        Request $request
+    ): JsonResponse {
         $user = $request->user();
 
         if (!$user) {
@@ -132,13 +176,22 @@ class SubscriptionController extends Controller
         if ($user->role !== 'owner') {
             return response()->json([
                 'success' => false,
-                'message' => 'Only store owners can manage subscriptions.',
+                'message' =>
+                    'Only store owners can manage subscriptions.',
             ], 403);
         }
 
+        /*
+         * Only real Stripe subscriptions can open
+         * the billing management portal.
+         *
+         * Local free trials must not be treated
+         * as paid Stripe subscriptions.
+         */
         $subscription = Subscription::query()
             ->where('user_id', $user->id)
             ->whereNotNull('stripe_customer_id')
+            ->whereNotNull('stripe_subscription_id')
             ->whereIn('status', [
                 'active',
                 'trialing',
@@ -151,7 +204,8 @@ class SubscriptionController extends Controller
         if (!$subscription) {
             return response()->json([
                 'success' => false,
-                'message' => 'No manageable subscription found.',
+                'message' =>
+                    'No Stripe subscription found. Please choose a plan first.',
             ], 404);
         }
 
@@ -162,33 +216,45 @@ class SubscriptionController extends Controller
 
             return response()->json([
                 'success' => false,
-                'message' => 'Billing service is not configured.',
+                'message' =>
+                    'Billing service is not configured.',
             ], 503);
         }
 
         try {
             $stripe = new StripeClient($stripeSecret);
 
-            $portalSession = $stripe->billingPortal->sessions->create([
-                'customer' => $subscription->stripe_customer_id,
-                'return_url' => rtrim(config('app.url'), '/') . '/dashboard',
-            ]);
+            $portalSession =
+                $stripe->billingPortal->sessions->create([
+                    'customer' =>
+                        $subscription->stripe_customer_id,
+
+                    'return_url' =>
+                        rtrim(config('app.url'), '/')
+                        . '/dashboard/billing',
+                ]);
 
             return response()->json([
                 'success' => true,
-                'message' => 'Stripe Customer Portal session created successfully.',
+                'message' =>
+                    'Stripe Customer Portal session created successfully.',
                 'portal_url' => $portalSession->url,
             ]);
+
         } catch (\Throwable $e) {
-            Log::error('Stripe Customer Portal session failed.', [
-                'user_id' => $user->id,
-                'subscription_id' => $subscription->id,
-                'error' => $e->getMessage(),
-            ]);
+            Log::error(
+                'Stripe Customer Portal session failed.',
+                [
+                    'user_id' => $user->id,
+                    'subscription_id' => $subscription->id,
+                    'error' => $e->getMessage(),
+                ]
+            );
 
             return response()->json([
                 'success' => false,
-                'message' => 'Unable to open billing portal. Please try again.',
+                'message' =>
+                    'Unable to open billing portal. Please try again.',
             ], 502);
         }
     }

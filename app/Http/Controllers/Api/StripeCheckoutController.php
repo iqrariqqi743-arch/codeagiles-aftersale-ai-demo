@@ -53,34 +53,43 @@ class StripeCheckoutController extends Controller
             ], 500);
         }
 
-        // Prevent duplicate active subscriptions.
-        $existing = Subscription::query()
+        /*
+         * Block duplicate Stripe subscriptions.
+         *
+         * Local free trials have:
+         * status = trialing
+         * stripe_subscription_id = null
+         *
+         * These users are allowed to purchase a paid plan.
+         */
+        $existingPaidSubscription = Subscription::query()
             ->where('user_id', $user->id)
+            ->whereNotNull('stripe_subscription_id')
             ->whereIn('status', [
                 'active',
                 'trialing',
                 'past_due',
                 'unpaid',
             ])
-            ->first();
+            ->exists();
 
-        if ($existing) {
+        if ($existingPaidSubscription) {
             return response()->json([
                 'success' => false,
-                'message' => 'You already have a subscription. Use the billing management flow to change plans.',
+                'message' => 'You already have a Stripe subscription. Please use Manage Billing.',
             ], 409);
         }
 
         try {
             $stripe = new StripeClient($secret);
 
+            // Reuse Stripe customer if one already exists.
             $customerId = Subscription::query()
                 ->where('user_id', $user->id)
                 ->whereNotNull('stripe_customer_id')
                 ->latest('id')
                 ->value('stripe_customer_id');
 
-            // Reuse an existing Stripe customer when possible.
             if (!$customerId) {
                 $customer = $stripe->customers->create([
                     'email' => $user->email,
@@ -98,23 +107,28 @@ class StripeCheckoutController extends Controller
             $session = $stripe->checkout->sessions->create([
                 'mode' => 'subscription',
                 'customer' => $customerId,
+
                 'line_items' => [
                     [
                         'price' => $priceId,
                         'quantity' => 1,
                     ],
                 ],
+
                 'client_reference_id' => (string) $user->id,
+
                 'subscription_data' => [
                     'metadata' => [
                         'user_id' => (string) $user->id,
                         'plan' => $plan,
                     ],
                 ],
+
                 'metadata' => [
                     'user_id' => (string) $user->id,
                     'plan' => $plan,
                 ],
+
                 'success_url' => $frontendUrl
                     . '/dashboard/billing?payment=success&session_id={CHECKOUT_SESSION_ID}',
 
@@ -124,11 +138,12 @@ class StripeCheckoutController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'Stripe Checkout session created.',
+                'message' => 'Stripe Checkout session created successfully.',
                 'checkout_url' => $session->url,
                 'session_id' => $session->id,
                 'plan' => $plan,
             ]);
+
         } catch (\Throwable $e) {
             Log::error('Stripe checkout failed', [
                 'user_id' => $user->id,

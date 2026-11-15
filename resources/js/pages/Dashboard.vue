@@ -33,6 +33,7 @@ const error = ref("");
 
 // Subscription state
 const subscription = ref(null);
+const trial = ref(null);
 const subscriptionLoading = ref(true);
 const subscriptionError = ref("");
 const portalLoading = ref(false);
@@ -121,11 +122,19 @@ const accentClass = computed(() =>
         : "text-cyan-700 hover:text-cyan-800",
 );
 
+// Free-trial state returned by GET /api/subscription/me
+const isFreeTrial = computed(() => subscription.value?.status === "trialing");
+const isTrialActive = computed(() => isFreeTrial.value && trial.value?.is_trialing === true);
+const isTrialExpired = computed(() => isFreeTrial.value && (trial.value?.is_expired === true || !subscription.value?.is_active));
+const trialDaysRemaining = computed(() => Math.max(0, Number(trial.value?.days_remaining) || 0));
+const trialProgress = computed(() => Math.min(100, Math.max(0, (trialDaysRemaining.value / 10) * 100)));
+const trialEndDate = computed(() => trial.value?.ends_at || subscription.value?.current_period_end);
+
 // Subscription status styling
 const subscriptionStatusClass = computed(() => {
     const status = subscription.value?.status;
 
-    if (status === "active" || status === "trialing") {
+    if (subscription.value?.is_active && (status === "active" || status === "trialing")) {
         return isDark.value
             ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
             : "bg-emerald-50 text-emerald-700 border-emerald-200";
@@ -255,10 +264,12 @@ async function loadSubscription() {
         }
 
         subscription.value = data.subscription ?? null;
+        trial.value = data.trial ?? null;
     } catch (err) {
         console.error("Subscription Error:", err);
 
         subscription.value = null;
+        trial.value = null;
         subscriptionError.value =
             err.message || "Could not load subscription data.";
     } finally {
@@ -392,6 +403,52 @@ onMounted(() => {
                 {{ error }}
             </p>
         </div>
+
+        <!-- Free Trial Countdown: shown only for trial subscriptions -->
+        <section
+            v-if="!subscriptionLoading && !subscriptionError && isFreeTrial"
+            class="overflow-hidden rounded-2xl border p-5 md:p-6"
+            :class="isDark ? 'border-cyan-500/25 bg-gradient-to-r from-[#173b52] to-[#172235]' : 'border-cyan-200 bg-gradient-to-r from-cyan-50 to-white shadow-sm'"
+        >
+            <div class="flex flex-col justify-between gap-5 md:flex-row md:items-center">
+                <div class="flex-1">
+                    <div class="mb-3 flex items-center gap-2">
+                        <Sparkles :size="19" :class="isDark ? 'text-cyan-400' : 'text-cyan-700'" />
+                        <span class="text-sm font-semibold" :class="titleClass">10-Day Free Trial</span>
+                        <span
+                            class="rounded-full px-2.5 py-1 text-xs font-semibold"
+                            :class="isTrialActive ? 'bg-emerald-500/10 text-emerald-500' : 'bg-red-500/10 text-red-500'"
+                        >{{ isTrialActive ? 'Active' : 'Expired' }}</span>
+                    </div>
+                    <h3 class="text-2xl font-bold" :class="titleClass">
+                        {{ isTrialActive ? `${trialDaysRemaining} ${trialDaysRemaining === 1 ? 'day' : 'days'} remaining` : 'Your free trial has ended' }}
+                    </h3>
+                    <p class="mt-2 text-sm" :class="mutedClass">
+                        {{ isTrialActive ? `Your free trial ends on ${formatDate(trialEndDate)}. No payment is required during the trial.` : 'Choose a paid subscription to continue using your workspace.' }}
+                    </p>
+                    <div class="mt-5 h-2.5 max-w-xl overflow-hidden rounded-full" :class="isDark ? 'bg-white/10' : 'bg-slate-200'">
+                        <div
+                            class="h-full rounded-full bg-cyan-500 transition-all duration-500"
+                            :style="{ width: `${trialProgress}%` }"
+                            role="progressbar"
+                            :aria-valuenow="trialDaysRemaining"
+                            aria-valuemin="0"
+                            aria-valuemax="10"
+                            aria-label="Trial days remaining"
+                        ></div>
+                    </div>
+                    <p class="mt-2 text-xs" :class="mutedClass">{{ trialDaysRemaining }} of 10 days remaining</p>
+                </div>
+                <a
+                    href="mailto:iqrariqqi741@gmail.com?subject=AfterSale%20AI%20-%20Subscription%20Upgrade"
+                    class="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-cyan-500 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400"
+                >
+                    <CreditCard :size="17" />
+                    Request an Upgrade
+                    <ArrowUpRight :size="16" />
+                </a>
+            </div>
+        </section>
 
         <!-- Statistics Cards -->
         <section class="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
@@ -558,7 +615,8 @@ onMounted(() => {
                     </h4>
 
                     <p class="mt-1 text-sm" :class="mutedClass">
-                        <template v-if="subscription.price !== null">
+                        <template v-if="isFreeTrial">Free for 10 days · then ${{ subscription.price }}/month if you subscribe</template>
+                        <template v-else-if="subscription.price !== null">
                             ${{ subscription.price }} /
                             {{ subscription.billing_interval }}
                         </template>
@@ -594,8 +652,8 @@ onMounted(() => {
                     <p class="mt-1 text-xs" :class="mutedClass">
                         {{
                             subscription.is_active
-                                ? "Your subscription is active"
-                                : "Check your subscription status"
+                                ? (isFreeTrial ? "Your free trial is active" : "Your subscription is active")
+                                : (isTrialExpired ? "Your free trial has expired" : "Check your subscription status")
                         }}
                     </p>
                 </div>
@@ -609,7 +667,7 @@ onMounted(() => {
                         />
 
                         <p class="text-sm" :class="mutedClass">
-                            Current Period Ends
+                            {{ isFreeTrial ? "Trial Ends" : "Current Period Ends" }}
                         </p>
                     </div>
 
@@ -619,7 +677,9 @@ onMounted(() => {
 
                     <p class="mt-1 text-xs" :class="mutedClass">
                         {{
-                            subscription.cancel_at_period_end
+                            isFreeTrial
+                                ? "Free access ends on this date"
+                                : subscription.cancel_at_period_end
                                 ? "Subscription ends on this date"
                                 : subscription.is_active
                                   ? "Expected renewal date"
@@ -636,12 +696,14 @@ onMounted(() => {
                             :class="isDark ? 'text-cyan-400' : 'text-cyan-700'"
                         />
 
-                        <p class="text-sm" :class="mutedClass">Auto Renewal</p>
+                        <p class="text-sm" :class="mutedClass">{{ isFreeTrial ? "Billing" : "Auto Renewal" }}</p>
                     </div>
 
                     <h4 class="mt-3 text-lg font-bold" :class="titleClass">
                         {{
-                            subscription.cancel_at_period_end
+                            isFreeTrial
+                                ? "No automatic charge"
+                                : subscription.cancel_at_period_end
                                 ? "Cancellation Scheduled"
                                 : subscription.is_active
                                   ? "Enabled"
@@ -651,7 +713,9 @@ onMounted(() => {
 
                     <p class="mt-1 text-xs" :class="mutedClass">
                         {{
-                            subscription.cancel_at_period_end
+                            isFreeTrial
+                                ? "Upgrade to start a paid subscription"
+                                : subscription.cancel_at_period_end
                                 ? "Will not renew automatically"
                                 : subscription.is_active
                                   ? "Renews unless canceled"
@@ -664,7 +728,7 @@ onMounted(() => {
             <!-- Stripe Customer Portal action -->
             <div
                 v-if="
-                    !subscriptionLoading && subscription && !subscriptionError
+                    !subscriptionLoading && subscription && !subscriptionError && !isFreeTrial && subscription.status === 'active' 
                 "
                 class="border-t px-5 py-4 md:px-6"
                 :class="isDark ? 'border-white/10' : 'border-slate-200'"

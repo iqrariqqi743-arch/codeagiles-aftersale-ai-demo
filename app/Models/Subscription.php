@@ -29,25 +29,65 @@ class Subscription extends Model
         'ended_at' => 'datetime',
     ];
 
-    // Subscription belongs to a merchant / owner
+    // Subscription belongs to merchant / owner
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
     }
 
-    // Check active or trial subscription
+    // Check if subscription is currently in trial
+    public function isTrialing(): bool
+    {
+        return $this->status === 'trialing'
+            && $this->current_period_end !== null
+            && $this->current_period_end->isFuture();
+    }
+
+    // Check if free trial has expired
+    public function isTrialExpired(): bool
+    {
+        return $this->status === 'trialing'
+            && $this->current_period_end !== null
+            && $this->current_period_end->isPast();
+    }
+
+    // Remaining trial days
+    public function trialDaysRemaining(): int
+    {
+        if (!$this->isTrialing()) {
+            return 0;
+        }
+
+        return max(
+            1,
+            (int) ceil(now()->diffInSeconds(
+                $this->current_period_end,
+                false
+            ) / 86400)
+        );
+    }
+
+    // Check active paid or trial subscription
     public function isActive(): bool
     {
-        return in_array($this->status, ['active', 'trialing'], true)
+        if ($this->status === 'trialing') {
+            return $this->isTrialing();
+        }
+
+        return $this->status === 'active'
             && (
-                $this->current_period_end === null ||
-                $this->current_period_end->isFuture()
+                $this->current_period_end === null
+                || $this->current_period_end->isFuture()
             );
     }
 
     // Check subscription cancellation
     public function isCanceled(): bool
     {
-        return in_array($this->status, ['canceled', 'cancelled'], true);
+        return in_array(
+            $this->status,
+            ['canceled', 'cancelled'],
+            true
+        );
     }
 }

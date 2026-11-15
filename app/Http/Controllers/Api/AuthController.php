@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Subscription;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -16,11 +17,10 @@ use Illuminate\Validation\ValidationException;
 class AuthController extends Controller
 {
     /**
-     * Register a new merchant owner.
+     * Register a new merchant owner with a 10-day free trial.
      */
     public function register(Request $request)
     {
-        // Registration setting must be checked on the backend.
         if (!Schema::hasTable('platform_settings')) {
             return response()->json([
                 'success' => false,
@@ -52,27 +52,60 @@ class AuthController extends Controller
             ],
         ]);
 
-        $user = User::create([
-            'name' => $validated['name'],
-            'email' => $validated['email'],
-            'password' => Hash::make($validated['password']),
-            'role' => 'owner',
-            'status' => 'active',
-        ]);
+        // Create the owner and trial together.
+        // If subscription creation fails, the user is rolled back.
+        $user = DB::transaction(function () use ($validated) {
+            $user = User::create([
+                'name' => $validated['name'],
+                'email' => $validated['email'],
+                'password' => Hash::make($validated['password']),
+                'role' => 'owner',
+                'status' => 'active',
+            ]);
 
-        // Registration does not automatically activate a paid subscription.
-        // The merchant must select a plan through Stripe checkout.
-        $token = $user->createToken('aftersale-ai-token')->plainTextToken;
+            $trialStart = now();
+            $trialEnd = $trialStart->copy()->addDays(10);
+
+            Subscription::create([
+                'user_id' => $user->id,
+                'plan' => 'starter',
+                'stripe_customer_id' => null,
+                'stripe_subscription_id' => null,
+                'stripe_price_id' => null,
+                'status' => 'trialing',
+                'current_period_start' => $trialStart,
+                'current_period_end' => $trialEnd,
+                'cancel_at_period_end' => false,
+                'canceled_at' => null,
+                'ended_at' => null,
+            ]);
+
+            return $user;
+        });
+
+        $token = $user
+            ->createToken('aftersale-ai-token')
+            ->plainTextToken;
 
         return response()->json([
             'success' => true,
-            'message' => 'Merchant account created successfully.',
+            'message' => 'Account created successfully. Your 10-day free trial has started.',
             'token' => $token,
             'user' => [
                 'id' => $user->id,
                 'name' => $user->name,
                 'email' => $user->email,
                 'role' => 'owner',
+            ],
+            'subscription' => [
+                'plan' => 'starter',
+                'status' => 'trialing',
+                'trial_days' => 10,
+                'trial_ends_at' => $user
+                    ->subscriptions()
+                    ->where('status', 'trialing')
+                    ->latest('id')
+                    ->value('current_period_end'),
             ],
         ], 201);
     }
@@ -98,7 +131,6 @@ class AuthController extends Controller
             ]);
         }
 
-        // Check the actual user's status.
         if ($user->status !== 'active') {
             return response()->json([
                 'success' => false,
@@ -117,7 +149,9 @@ class AuthController extends Controller
             ], 403);
         }
 
-        $token = $user->createToken('aftersale-ai-token')->plainTextToken;
+        $token = $user
+            ->createToken('aftersale-ai-token')
+            ->plainTextToken;
 
         return response()->json([
             'success' => true,
@@ -172,13 +206,10 @@ class AuthController extends Controller
             'email' => ['required', 'email'],
         ]);
 
-        // Laravel password broker handles reset token creation
-        // and sends a reset notification via configured mail.
         Password::broker()->sendResetLink([
             'email' => $validated['email'],
         ]);
 
-        // Generic response avoids exposing registered email addresses.
         return response()->json([
             'success' => true,
             'message' => 'If this email is registered, a password reset link will be sent.',
@@ -208,7 +239,6 @@ class AuthController extends Controller
                     'remember_token' => Str::random(60),
                 ])->save();
 
-                // Revoke existing API sessions after password reset.
                 $user->tokens()->delete();
             }
         );
@@ -269,7 +299,6 @@ class AuthController extends Controller
             'remember_token' => Str::random(60),
         ])->save();
 
-        // Revoke other sessions but keep the current session active.
         $currentTokenId = $user->currentAccessToken()?->id;
 
         if ($currentTokenId) {

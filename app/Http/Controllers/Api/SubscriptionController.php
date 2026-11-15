@@ -32,17 +32,17 @@ class SubscriptionController extends Controller
             ], 403);
         }
 
-        $subscription = Subscription::query()
+        $subscriptions = Subscription::query()
             ->where('user_id', $user->id)
-            ->orderByRaw("
-                CASE
-                    WHEN status IN ('active', 'trialing') THEN 0
-                    WHEN status IN ('past_due', 'unpaid') THEN 1
-                    ELSE 2
-                END
-            ")
             ->latest('id')
-            ->first();
+            ->get();
+
+        // Prefer a currently valid subscription.
+        // This prevents an expired trial from hiding
+        // a valid paid subscription.
+        $subscription = $subscriptions->first(
+            fn (Subscription $item) => $item->isActive()
+        ) ?? $subscriptions->first();
 
         if (!$subscription) {
             return response()->json([
@@ -50,6 +50,12 @@ class SubscriptionController extends Controller
                 'message' => 'No subscription found.',
                 'has_subscription' => false,
                 'subscription' => null,
+                'trial' => [
+                    'is_trialing' => false,
+                    'is_expired' => false,
+                    'days_remaining' => 0,
+                    'ends_at' => null,
+                ],
             ]);
         }
 
@@ -73,6 +79,9 @@ class SubscriptionController extends Controller
             'price' => null,
         ];
 
+        $isTrialing = $subscription->isTrialing();
+        $isTrialExpired = $subscription->isTrialExpired();
+
         return response()->json([
             'success' => true,
             'message' => 'Subscription fetched successfully.',
@@ -87,19 +96,27 @@ class SubscriptionController extends Controller
                 'status' => $subscription->status,
                 'is_active' => $subscription->isActive(),
                 'current_period_start' =>
-                $subscription->current_period_start?->toIso8601String(),
+                    $subscription->current_period_start?->toIso8601String(),
                 'current_period_end' =>
-                $subscription->current_period_end?->toIso8601String(),
+                    $subscription->current_period_end?->toIso8601String(),
                 'cancel_at_period_end' =>
-                $subscription->cancel_at_period_end,
+                    $subscription->cancel_at_period_end,
                 'canceled_at' =>
-                $subscription->canceled_at?->toIso8601String(),
+                    $subscription->canceled_at?->toIso8601String(),
+            ],
+            'trial' => [
+                'is_trialing' => $isTrialing,
+                'is_expired' => $isTrialExpired,
+                'days_remaining' => $subscription->trialDaysRemaining(),
+                'ends_at' => $subscription->status === 'trialing'
+                    ? $subscription->current_period_end?->toIso8601String()
+                    : null,
             ],
         ]);
     }
 
     /**
-     * Create a Stripe Customer Portal session for the logged-in owner.
+     * Create a Stripe Customer Portal session.
      */
     public function createPortalSession(Request $request): JsonResponse
     {

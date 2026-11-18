@@ -1,4 +1,3 @@
-
 <?php
 
 namespace App\Http\Controllers\Api;
@@ -53,7 +52,6 @@ class GmailCronController extends Controller
                 'message' => 'Gmail sync completed',
                 'stats' => $stats,
             ]);
-
         } catch (Throwable $e) {
             Log::error('Production Gmail cron failed', [
                 'error' => $e->getMessage(),
@@ -63,7 +61,6 @@ class GmailCronController extends Controller
                 'success' => false,
                 'message' => 'Gmail sync failed',
             ], 500);
-
         } finally {
             $lock->release();
         }

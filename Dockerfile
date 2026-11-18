@@ -14,10 +14,10 @@ RUN npm run build
 
 
 # Stage 2: Laravel + Apache
-FROM php:8.3-apache
+FROM php:8.3-apache-bookworm
 
-# Install system packages and PHP extension dependencies
-RUN apt-get update && apt-get install -y \
+# Install required system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     unzip \
     libc-client2007e-dev \
@@ -28,9 +28,6 @@ RUN apt-get update && apt-get install -y \
     libxml2-dev \
     libssl-dev \
     libcurl4-openssl-dev \
-    && docker-php-ext-configure imap \
-        --with-kerberos \
-        --with-imap-ssl \
     && docker-php-ext-install -j$(nproc) \
         pdo_mysql \
         mysqli \
@@ -39,9 +36,13 @@ RUN apt-get update && apt-get install -y \
         mbstring \
         bcmath \
         opcache \
-        imap \
     && rm -rf /var/lib/apt/lists/*
 
+# Install PHP IMAP extension from PECL
+RUN pecl install imap \
+    && docker-php-ext-enable imap
+
+# Enable Apache rewrite
 RUN a2enmod rewrite
 
 # Install Composer
@@ -62,7 +63,7 @@ RUN composer install \
 # Copy Laravel application
 COPY . .
 
-# Copy compiled Vue assets from Node build
+# Copy compiled Vue assets
 COPY --from=frontend /app/public/build /var/www/html/public/build
 
 # Configure Apache document root
@@ -78,7 +79,7 @@ RUN printf '<Directory /var/www/html/public>\nAllowOverride All\nRequire all gra
     > /etc/apache2/conf-available/laravel.conf \
     && a2enconf laravel
 
-# Prepare Laravel directories and permissions
+# Laravel directories
 RUN mkdir -p \
     storage/framework/cache \
     storage/framework/sessions \
@@ -91,7 +92,7 @@ RUN mkdir -p \
 # Laravel package discovery
 RUN php artisan package:discover --ansi
 
-# Configure EthioDeploy port
+# EthioDeploy port
 ENV PORT=3000
 
 RUN printf '#!/bin/sh\nset -e\nPORT="${PORT:-3000}"\nsed -i "s/^Listen 80$/Listen ${PORT}/" /etc/apache2/ports.conf\nsed -i "s/:80>/:${PORT}>/" /etc/apache2/sites-available/000-default.conf\nexec apache2-foreground\n' \

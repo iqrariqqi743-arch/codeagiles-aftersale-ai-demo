@@ -16,24 +16,30 @@ RUN npm run build
 # Stage 2: Laravel + Apache
 FROM php:8.3-apache
 
-# Install required system packages and PHP extensions
+# Install system packages and PHP extension dependencies
 RUN apt-get update && apt-get install -y \
     git \
     unzip \
+    libc-client2007e-dev \
+    libkrb5-dev \
     libzip-dev \
     libicu-dev \
     libonig-dev \
     libxml2-dev \
     libssl-dev \
     libcurl4-openssl-dev \
-    && docker-php-ext-install \
-    pdo_mysql \
-    mysqli \
-    zip \
-    intl \
-    mbstring \
-    bcmath \
-    opcache \
+    && docker-php-ext-configure imap \
+        --with-kerberos \
+        --with-imap-ssl \
+    && docker-php-ext-install -j$(nproc) \
+        pdo_mysql \
+        mysqli \
+        zip \
+        intl \
+        mbstring \
+        bcmath \
+        opcache \
+        imap \
     && rm -rf /var/lib/apt/lists/*
 
 RUN a2enmod rewrite

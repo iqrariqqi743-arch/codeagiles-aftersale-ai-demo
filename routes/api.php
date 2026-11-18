@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Route;
 
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\GmailCronController;
 use App\Http\Controllers\Api\StoreController;
 use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\ReturnController;
@@ -370,6 +371,17 @@ Route::middleware('auth:sanctum')->group(function () {
 | STRIPE WEBHOOK
 |--------------------------------------------------------------------------
 */
+
+/*
+|--------------------------------------------------------------------------
+| GMAIL CUSTOMER REPLIES - EXTERNAL CRON
+|--------------------------------------------------------------------------
+| The controller verifies X-Cron-Secret and prevents overlapping runs.
+| Keep GMAIL_CRON_SECRET private. This route must not require Sanctum.
+*/
+
+Route::post('/cron/gmail-sync', [GmailCronController::class, 'sync'])
+    ->middleware('throttle:6,1');
 
 Route::post(
     '/stripe/webhook',

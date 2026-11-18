@@ -43,6 +43,20 @@ return [
     |
     */
 
+     /*
+    |--------------------------------------------------------------------------
+    | Gmail Cron Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Secret used to authorize external cron requests
+    | that trigger Gmail customer reply synchronization.
+    |
+    */
+
+    'gmail_cron' => [
+        'secret' => env('GMAIL_CRON_SECRET'),
+    ],
+
     'gmail_imap' => [
         'host' => env('IMAP_HOST', 'imap.gmail.com'),
         'port' => (int) env('IMAP_PORT', 993),

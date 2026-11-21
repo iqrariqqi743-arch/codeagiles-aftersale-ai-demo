@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
+    <meta name="codeagiles-verification" content="HxUsAJUGvablwBWBS1HPgOe6hgc0cW8TfNasprvflRaWhAfGhmRF5baKs2PngZzm">
 
     @php
         $siteName = 'CodeAgiles AfterSale AI';
